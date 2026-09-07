@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SECURITY_CYDA
+	bool "CYDA OS capability enforcement"
+	depends on SECURITY && CYDA
+	default y
+	help
+	  Enforces the capability bitmap of CYDA agents at the syscall
+	  boundary: network connects, camera/GPU device access, cgroup
+	  writes and scheduler changes are refused for agent threads that
+	  lack the corresponding capability. Stacks with other LSMs.

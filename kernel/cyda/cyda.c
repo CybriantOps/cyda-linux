@@ -10,6 +10,7 @@
  *   /dev/cyda                   ioctl: REGISTER, UPDATE, UNREGISTER, QUERY
  *   /sys/kernel/cyda/version    interface version
  *   /sys/kernel/cyda/count      registered agents
+ *   /sys/kernel/cyda/denied     operations refused by the CYDA LSM
  *   /sys/kernel/cyda/agents     tid id priority state capabilities policy nice cpu_ns
  *
  * This is the foundation for an agent-aware scheduling class and for
@@ -31,12 +32,19 @@
 #include <linux/uaccess.h>
 #include <uapi/linux/cyda.h>
 
-#define CYDA_IFACE_VERSION "0.2"
+#define CYDA_IFACE_VERSION "0.3"
 
 static LIST_HEAD(cyda_agents);
 static DEFINE_SPINLOCK(cyda_lock);
 static unsigned int cyda_count;
+static atomic64_t cyda_denied = ATOMIC64_INIT(0);
 static struct kobject *cyda_kobj;
+
+/* Called by the CYDA LSM whenever an agent is refused something. */
+void cyda_agent_denied(void)
+{
+	atomic64_inc(&cyda_denied);
+}
 
 static const char *cyda_state_name(u32 state)
 {
@@ -201,6 +209,11 @@ static ssize_t count_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 	return sysfs_emit(buf, "%u\n", n);
 }
 
+static ssize_t denied_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%lld\n", (long long)atomic64_read(&cyda_denied));
+}
+
 static ssize_t agents_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct cyda_agent *a;
@@ -224,11 +237,13 @@ static ssize_t agents_show(struct kobject *kobj, struct kobj_attribute *attr, ch
 
 static struct kobj_attribute version_attr = __ATTR_RO(version);
 static struct kobj_attribute count_attr = __ATTR_RO(count);
+static struct kobj_attribute denied_attr = __ATTR_RO(denied);
 static struct kobj_attribute agents_attr = __ATTR_RO(agents);
 
 static struct attribute *cyda_attrs[] = {
 	&version_attr.attr,
 	&count_attr.attr,
+	&denied_attr.attr,
 	&agents_attr.attr,
 	NULL,
 };

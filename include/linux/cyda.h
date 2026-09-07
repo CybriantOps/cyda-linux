@@ -21,8 +21,10 @@ struct cyda_agent {
 
 #ifdef CONFIG_CYDA
 void cyda_task_exit(struct task_struct *tsk);
+void cyda_agent_denied(void);
 #else
 static inline void cyda_task_exit(struct task_struct *tsk) { }
+static inline void cyda_agent_denied(void) { }
 #endif
 
 #endif /* _LINUX_CYDA_H */
