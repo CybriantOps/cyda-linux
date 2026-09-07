@@ -8,7 +8,9 @@
  * cannot reach a device or a network endpoint its capability bitmap does
  * not cover, and cannot change its own scheduling.
  *
- *   socket_connect     AF_INET/AF_INET6 needs a PLC/Modbus/OPC-UA/RESOURCE_READ capability
+ *   socket_connect     AF_INET/AF_INET6 needs a PLC/Modbus/OPC-UA/RESOURCE_READ capability,
+ *                      and the destination must be one of the agent's endpoints
+ *                      (CYDA_IOC_SET_ENDPOINTS) when it has a list
  *   file_open          /dev/video* (major 81) needs CAMERA_READ;
  *                      DRM (226) / NVIDIA (195) need GPU_USE;
  *                      writing cgroup files is never allowed for an agent
@@ -28,6 +30,9 @@
 #include <linux/ratelimit.h>
 #include <linux/sched.h>
 #include <linux/socket.h>
+#include <linux/in.h>
+#include <linux/in6.h>
+#include <linux/string.h>
 #include <uapi/linux/cyda.h>
 #include <uapi/linux/lsm.h>
 
@@ -46,17 +51,63 @@ static int cyda_deny(struct cyda_agent *a, const char *what)
 	return -EPERM;
 }
 
+/* Does the destination match one of the agent's allowed endpoints? */
+static bool cyda_endpoint_allowed(struct cyda_agent *a, struct sockaddr *address, int addrlen)
+{
+	unsigned int i;
+	u16 port;
+	const u8 *addr;
+	size_t alen;
+
+	if (address->sa_family == AF_INET) {
+		struct sockaddr_in *in = (struct sockaddr_in *)address;
+
+		if (addrlen < (int)sizeof(*in))
+			return false;
+		port = ntohs(in->sin_port);
+		addr = (const u8 *)&in->sin_addr;
+		alen = 4;
+	} else {
+		struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)address;
+
+		if (addrlen < (int)sizeof(*in6))
+			return false;
+		port = ntohs(in6->sin6_port);
+		addr = (const u8 *)&in6->sin6_addr;
+		alen = 16;
+	}
+	for (i = 0; i < a->endpoint_count && i < CYDA_MAX_ENDPOINTS; i++) {
+		const struct cyda_endpoint *e = &a->endpoints[i];
+
+		if (e->family != address->sa_family)
+			continue;
+		if (e->port && e->port != port)
+			continue;
+		if (memcmp(e->addr, addr, alen) == 0)
+			return true;
+	}
+	return false;
+}
+
 static int cyda_socket_connect(struct socket *sock, struct sockaddr *address, int addrlen)
 {
 	struct cyda_agent *a = current->cyda_agent;
+	bool allowed;
 
 	if (!a)
 		return 0;
 	if (address->sa_family != AF_INET && address->sa_family != AF_INET6)
 		return 0;
-	if (a->capabilities & CYDA_CAP_NET)
+	if (!(a->capabilities & CYDA_CAP_NET))
+		return cyda_deny(a, "network connect without a device capability");
+	if (!a->endpoint_count)
 		return 0;
-	return cyda_deny(a, "network connect without a device capability");
+	spin_lock(&cyda_agent_lock);
+	allowed = cyda_endpoint_allowed(a, address, addrlen);
+	spin_unlock(&cyda_agent_lock);
+	if (allowed)
+		return 0;
+	return cyda_deny(a, "network connect outside the agent's endpoints");
 }
 
 static int cyda_file_open(struct file *file)

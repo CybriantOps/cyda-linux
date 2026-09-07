@@ -4,6 +4,7 @@
 
 #include <linux/list.h>
 #include <linux/types.h>
+#include <uapi/linux/cyda.h>
 
 struct task_struct;
 
@@ -17,9 +18,13 @@ struct cyda_agent {
 	u32 state;		/* CYDA_STATE_* */
 	u64 capabilities;	/* CYDA_CAP_* bitmap */
 	u64 registered_ns;
+	u32 endpoint_count;	/* 0 = no allow-list */
+	struct cyda_endpoint endpoints[CYDA_MAX_ENDPOINTS];
 };
 
 #ifdef CONFIG_CYDA
+#include <linux/spinlock.h>
+extern spinlock_t cyda_agent_lock;
 void cyda_task_exit(struct task_struct *tsk);
 void cyda_agent_denied(void);
 #else

@@ -11,7 +11,7 @@
  *   /sys/kernel/cyda/version    interface version
  *   /sys/kernel/cyda/count      registered agents
  *   /sys/kernel/cyda/denied     operations refused by the CYDA LSM
- *   /sys/kernel/cyda/agents     tid id priority state capabilities policy nice cpu_ns
+ *   /sys/kernel/cyda/agents     tid id priority state capabilities policy nice cpu_ns endpoints
  *
  * This is the foundation for an agent-aware scheduling class and for
  * capability checks at the syscall boundary (see docs/ROADMAP.md).
@@ -19,6 +19,7 @@
 
 #include <linux/cyda.h>
 #include <linux/fs.h>
+#include <linux/socket.h>
 #include <linux/init.h>
 #include <linux/kobject.h>
 #include <linux/miscdevice.h>
@@ -32,10 +33,11 @@
 #include <linux/uaccess.h>
 #include <uapi/linux/cyda.h>
 
-#define CYDA_IFACE_VERSION "0.3"
+#define CYDA_IFACE_VERSION "0.4"
 
 static LIST_HEAD(cyda_agents);
-static DEFINE_SPINLOCK(cyda_lock);
+DEFINE_SPINLOCK(cyda_agent_lock);
+#define cyda_lock cyda_agent_lock
 static unsigned int cyda_count;
 static atomic64_t cyda_denied = ATOMIC64_INIT(0);
 static struct kobject *cyda_kobj;
@@ -161,9 +163,45 @@ static long cyda_query(struct cyda_agent_query __user *uarg)
 	return 0;
 }
 
+static long cyda_set_endpoints(struct cyda_endpoints __user *uarg)
+{
+	struct cyda_endpoints *eps;
+	struct cyda_agent *a = current->cyda_agent;
+	unsigned int i;
+
+	if (!a)
+		return -ENOENT;
+	eps = kmalloc(sizeof(*eps), GFP_KERNEL);
+	if (!eps)
+		return -ENOMEM;
+	if (copy_from_user(eps, uarg, sizeof(*eps))) {
+		kfree(eps);
+		return -EFAULT;
+	}
+	if (eps->count > CYDA_MAX_ENDPOINTS) {
+		kfree(eps);
+		return -EINVAL;
+	}
+	for (i = 0; i < eps->count; i++) {
+		if (eps->list[i].family != AF_INET && eps->list[i].family != AF_INET6) {
+			kfree(eps);
+			return -EINVAL;
+		}
+	}
+	spin_lock(&cyda_lock);
+	a->endpoint_count = eps->count;
+	memcpy(a->endpoints, eps->list, sizeof(a->endpoints));
+	spin_unlock(&cyda_lock);
+	kfree(eps);
+	pr_info("cyda: agent %s may connect to %u endpoint(s)\n", a->id, a->endpoint_count);
+	return 0;
+}
+
 static long cyda_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
+	case CYDA_IOC_SET_ENDPOINTS:
+		return cyda_set_endpoints((struct cyda_endpoints __user *)arg);
 	case CYDA_IOC_REGISTER:
 		return cyda_register((struct cyda_agent_reg __user *)arg);
 	case CYDA_IOC_UPDATE:
@@ -224,10 +262,11 @@ static ssize_t agents_show(struct kobject *kobj, struct kobj_attribute *attr, ch
 		u64 utime, stime;
 
 		task_cputime(a->task, &utime, &stime);
-		len += sysfs_emit_at(buf, len, "%d %s %u %s %#llx %d %d %llu\n", a->tid, a->id,
+		len += sysfs_emit_at(buf, len, "%d %s %u %s %#llx %d %d %llu %u\n", a->tid, a->id,
 				     a->priority, cyda_state_name(a->state),
 				     (unsigned long long)a->capabilities, a->task->policy,
-				     task_nice(a->task), (unsigned long long)(utime + stime));
+				     task_nice(a->task), (unsigned long long)(utime + stime),
+				     a->endpoint_count);
 		if (len >= PAGE_SIZE - 96)
 			break;
 	}

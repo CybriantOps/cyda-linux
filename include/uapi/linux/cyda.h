@@ -42,6 +42,22 @@ struct cyda_agent_reg {
 	__u64 capabilities;
 };
 
+/* Network endpoints an agent may connect to (its leased devices). */
+#define CYDA_MAX_ENDPOINTS 8
+
+struct cyda_endpoint {
+	__u32 family;		/* AF_INET or AF_INET6 */
+	__u16 port;		/* host byte order; 0 = any port */
+	__u16 pad;
+	__u8 addr[16];		/* 4 bytes for AF_INET, 16 for AF_INET6 */
+};
+
+struct cyda_endpoints {
+	__u32 count;		/* 0 = no list: any address with a device capability */
+	__u32 flags;
+	struct cyda_endpoint list[CYDA_MAX_ENDPOINTS];
+};
+
 struct cyda_agent_query {
 	__s32 tid;
 	__u32 pad;
@@ -53,5 +69,6 @@ struct cyda_agent_query {
 #define CYDA_IOC_UNREGISTER	_IO(CYDA_IOC_MAGIC, 2)
 #define CYDA_IOC_UPDATE		_IOW(CYDA_IOC_MAGIC, 3, struct cyda_agent_reg)
 #define CYDA_IOC_QUERY		_IOWR(CYDA_IOC_MAGIC, 4, struct cyda_agent_query)
+#define CYDA_IOC_SET_ENDPOINTS	_IOW(CYDA_IOC_MAGIC, 5, struct cyda_endpoints)
 
 #endif /* _UAPI_LINUX_CYDA_H */
