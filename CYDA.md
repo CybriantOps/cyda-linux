@@ -7,6 +7,8 @@ knows what an agent is.
 
 ```text
 kernel/
+├── linux/            git submodule: the CYDA kernel fork (github.com/CybriantOps/cyda-linux,
+│                     branch cyda/6.8 = Linux 6.8.12 + the patches below, already applied)
 ├── build.sh          source → patches → config → bzImage   (kernel/out/vmlinuz-cyda)
 ├── cyda.config       configuration fragment merged over x86_64 defconfig
 ├── patches/          CYDA patches, applied in order
@@ -18,18 +20,39 @@ kernel/
 ## Build
 
 ```bash
-scripts/dev-setup.sh        # once (apt: linux-source, flex, bison, libssl-dev, libelf-dev, bc, zstd)
-kernel/build.sh             # ~15 min on 4 cores; incremental afterwards
+scripts/dev-setup.sh        # once: apt tooling (flex, bison, libssl-dev, libelf-dev, bc, zstd) + the kernel/linux submodule
+kernel/build.sh             # ~15 min on 4 cores; incremental afterwards (objects in kernel/out/obj)
+kernel/build.sh --configure # only patches + configuration, for a quick check
 scripts/boot-test.sh        # boots the image on kernel/out/vmlinuz-cyda in QEMU/OVMF
 ```
 
-`build.sh` takes the source from `--source DIR`, `$CYDA_KERNEL_SRC`,
-`kernel/linux` (a git clone of Linux), or the Ubuntu `linux-source`
-package in `/usr/src`. Applied patches are recorded in
-`<source>/.cyda-patches-applied`, so a tree is never patched twice.
-`kernel/check-patches.sh` applies the whole stack to pristine sources
-without fuzz and compares the result with `kernel/src/`; CI runs it
-before every build and boots the image on the resulting kernel.
+`build.sh` takes the source from `--source DIR`, `$CYDA_KERNEL_SRC`, the
+`kernel/linux` submodule, or the Ubuntu `linux-source` package in
+`/usr/src`. Applied patches are recorded in
+`<source>/.cyda-patches-applied`, so a tree is never patched twice, and
+the patched files are compared with `kernel/src/` before anything is
+compiled. `kernel/check-patches.sh` applies the whole stack to pristine
+sources (the root commit of the fork, Linux 6.8.12 as imported) without
+fuzz and compares the result with `kernel/src/`; CI runs it before every
+build and boots the image on the resulting kernel.
+
+## The fork: `cyda-linux`
+
+The kernel source lives in its own repository,
+[CybriantOps/cyda-linux](https://github.com/CybriantOps/cyda-linux),
+branch `cyda/6.8`: a root commit "Linux 6.8.12" (the tree of upstream
+`v6.8.12`, commit `632428373`, without the history before it), one
+commit per CYDA patch, and `CYDA.md` (this document) with the
+`.cyda-patches-applied` stamp. The fork is the tree we will keep
+changing; `kernel/patches/` and `kernel/src/` stay the reviewable form
+of those changes and must match it (`check-patches.sh`). Working on the
+kernel:
+
+```bash
+git submodule update --init kernel/linux     # once
+cd kernel/linux && git checkout cyda/6.8     # edit, build with ../build.sh, commit here
+cd ../.. && git add kernel/linux             # then move the submodule pointer in cyda-os
+```
 
 ## Configuration principles (`cyda.config`)
 
