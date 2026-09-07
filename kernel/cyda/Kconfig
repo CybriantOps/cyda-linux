@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config CYDA
+	bool "CYDA OS agent-aware kernel interface"
+	depends on SYSFS
+	default y
+	help
+	  Exposes CYDA agents (threads named "agent:<id>" by the CYDA
+	  runtime) under /sys/kernel/cyda/ and prints the CYDA banner at
+	  boot. Foundation for the agent object and the agent-aware
+	  scheduling class of CYDA OS.
