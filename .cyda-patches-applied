@@ -1,0 +1,5 @@
+0001-cyda-kernel-interface.patch
+0002-cyda-agent-object.patch
+0003-cyda-capability-lsm.patch
+0004-cyda-endpoint-allowlist.patch
+0005-cyda-watchdog-quarantine.patch
