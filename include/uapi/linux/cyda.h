@@ -17,6 +17,7 @@
 #define CYDA_STATE_CRITICAL	1
 #define CYDA_STATE_THROTTLED	2
 #define CYDA_STATE_SUSPENDED	3
+#define CYDA_STATE_FAULTED	4	/* watchdog expired: quarantined by the kernel */
 
 /* Capability bits (mirrored by cyda-core in user space). */
 #define CYDA_CAP_PLC_READ		(1ULL << 0)
@@ -70,5 +71,8 @@ struct cyda_agent_query {
 #define CYDA_IOC_UPDATE		_IOW(CYDA_IOC_MAGIC, 3, struct cyda_agent_reg)
 #define CYDA_IOC_QUERY		_IOWR(CYDA_IOC_MAGIC, 4, struct cyda_agent_query)
 #define CYDA_IOC_SET_ENDPOINTS	_IOW(CYDA_IOC_MAGIC, 5, struct cyda_endpoints)
+/* Watchdog: the agent must HEARTBEAT at least every N ms (0 disables). */
+#define CYDA_IOC_SET_WATCHDOG	_IOW(CYDA_IOC_MAGIC, 6, __u64)
+#define CYDA_IOC_HEARTBEAT	_IO(CYDA_IOC_MAGIC, 7)
 
 #endif /* _UAPI_LINUX_CYDA_H */

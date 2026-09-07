@@ -17,8 +17,9 @@
  *   task_setscheduler  an agent never reschedules itself or others
  *   task_setnice
  *
- * Denials return -EPERM, are counted in /sys/kernel/cyda/denied and are
- * logged (rate limited). Threads that are not agents are unaffected.
+ * An agent quarantined by the watchdog (state "faulted") is refused
+ * everything. Denials return -EPERM, are counted in /sys/kernel/cyda/denied
+ * and are logged (rate limited). Threads that are not agents are unaffected.
  */
 
 #include <linux/cyda.h>
@@ -98,6 +99,8 @@ static int cyda_socket_connect(struct socket *sock, struct sockaddr *address, in
 		return 0;
 	if (address->sa_family != AF_INET && address->sa_family != AF_INET6)
 		return 0;
+	if (a->faulted)
+		return cyda_deny(a, "quarantined agent attempted a network connect");
 	if (!(a->capabilities & CYDA_CAP_NET))
 		return cyda_deny(a, "network connect without a device capability");
 	if (!a->endpoint_count)
@@ -117,6 +120,8 @@ static int cyda_file_open(struct file *file)
 
 	if (!a)
 		return 0;
+	if (a->faulted)
+		return cyda_deny(a, "quarantined agent attempted to open a file");
 	inode = file_inode(file);
 	if (S_ISCHR(inode->i_mode)) {
 		unsigned int major = MAJOR(inode->i_rdev);

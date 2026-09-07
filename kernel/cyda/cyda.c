@@ -11,6 +11,7 @@
  *   /sys/kernel/cyda/version    interface version
  *   /sys/kernel/cyda/count      registered agents
  *   /sys/kernel/cyda/denied     operations refused by the CYDA LSM
+ *   /sys/kernel/cyda/faults     agents quarantined by the watchdog
  *   /sys/kernel/cyda/agents     tid id priority state capabilities policy nice cpu_ns endpoints
  *
  * This is the foundation for an agent-aware scheduling class and for
@@ -26,6 +27,10 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/sched/cputime.h>
+#include <linux/sched/types.h>
+#include <linux/jiffies.h>
+#include <linux/ktime.h>
+#include <linux/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
@@ -33,13 +38,14 @@
 #include <linux/uaccess.h>
 #include <uapi/linux/cyda.h>
 
-#define CYDA_IFACE_VERSION "0.4"
+#define CYDA_IFACE_VERSION "0.5"
 
 static LIST_HEAD(cyda_agents);
 DEFINE_SPINLOCK(cyda_agent_lock);
 #define cyda_lock cyda_agent_lock
 static unsigned int cyda_count;
 static atomic64_t cyda_denied = ATOMIC64_INIT(0);
+static atomic64_t cyda_faults = ATOMIC64_INIT(0);
 static struct kobject *cyda_kobj;
 
 /* Called by the CYDA LSM whenever an agent is refused something. */
@@ -59,6 +65,8 @@ static const char *cyda_state_name(u32 state)
 		return "throttled";
 	case CYDA_STATE_SUSPENDED:
 		return "suspended";
+	case CYDA_STATE_FAULTED:
+		return "faulted";
 	default:
 		return "unknown";
 	}
@@ -76,8 +84,37 @@ void cyda_task_exit(struct task_struct *tsk)
 	list_del(&a->node);
 	cyda_count--;
 	spin_unlock(&cyda_lock);
+	del_timer_sync(&a->watchdog);
+	cancel_work_sync(&a->quarantine);
 	pr_info("cyda: agent %s left (tid %d)\n", a->id, a->tid);
 	kfree(a);
+}
+
+/*
+ * Quarantine, in process context: the agent keeps its thread (a single
+ * thread cannot be killed), but it runs only when nothing else wants the
+ * CPU and the LSM refuses it every device and network access.
+ */
+static void cyda_quarantine_work(struct work_struct *work)
+{
+	struct cyda_agent *a = container_of(work, struct cyda_agent, quarantine);
+	struct sched_param idle = { .sched_priority = 0 };
+
+	sched_setscheduler_nocheck(a->task, SCHED_IDLE, &idle);
+	pr_warn("cyda: agent %s (tid %d) missed its %llu ms watchdog: quarantined (SCHED_IDLE, no I/O)\n",
+		a->id, a->tid, (unsigned long long)a->watchdog_ms);
+}
+
+static void cyda_watchdog_expired(struct timer_list *t)
+{
+	struct cyda_agent *a = from_timer(a, t, watchdog);
+
+	if (a->faulted)
+		return;
+	a->faulted = true;
+	a->state = CYDA_STATE_FAULTED;
+	atomic64_inc(&cyda_faults);
+	schedule_work(&a->quarantine);
 }
 
 static long cyda_register(struct cyda_agent_reg __user *uarg)
@@ -105,6 +142,9 @@ static long cyda_register(struct cyda_agent_reg __user *uarg)
 	a->state = reg.state;
 	a->capabilities = reg.capabilities;
 	a->registered_ns = ktime_get_ns();
+	a->last_heartbeat_ns = a->registered_ns;
+	timer_setup(&a->watchdog, cyda_watchdog_expired, 0);
+	INIT_WORK(&a->quarantine, cyda_quarantine_work);
 	INIT_LIST_HEAD(&a->node);
 	spin_lock(&cyda_lock);
 	list_add_tail(&a->node, &cyda_agents);
@@ -127,6 +167,8 @@ static long cyda_update(struct cyda_agent_reg __user *uarg)
 		return -EFAULT;
 	if (reg.priority > 100)
 		return -EINVAL;
+	if (a->faulted)
+		return -EPERM;
 	spin_lock(&cyda_lock);
 	a->priority = reg.priority;
 	a->state = reg.state;
@@ -197,9 +239,46 @@ static long cyda_set_endpoints(struct cyda_endpoints __user *uarg)
 	return 0;
 }
 
+static long cyda_set_watchdog(u64 __user *uarg)
+{
+	struct cyda_agent *a = current->cyda_agent;
+	u64 ms;
+
+	if (!a)
+		return -ENOENT;
+	if (copy_from_user(&ms, uarg, sizeof(ms)))
+		return -EFAULT;
+	if (ms > 3600000ULL)
+		return -EINVAL;
+	a->watchdog_ms = ms;
+	if (ms)
+		mod_timer(&a->watchdog, jiffies + msecs_to_jiffies(ms));
+	else
+		del_timer_sync(&a->watchdog);
+	return 0;
+}
+
+static long cyda_heartbeat(void)
+{
+	struct cyda_agent *a = current->cyda_agent;
+
+	if (!a)
+		return -ENOENT;
+	if (a->faulted)
+		return -EPERM;	/* a quarantined agent stays quarantined */
+	a->last_heartbeat_ns = ktime_get_ns();
+	if (a->watchdog_ms)
+		mod_timer(&a->watchdog, jiffies + msecs_to_jiffies(a->watchdog_ms));
+	return 0;
+}
+
 static long cyda_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
+	case CYDA_IOC_SET_WATCHDOG:
+		return cyda_set_watchdog((u64 __user *)arg);
+	case CYDA_IOC_HEARTBEAT:
+		return cyda_heartbeat();
 	case CYDA_IOC_SET_ENDPOINTS:
 		return cyda_set_endpoints((struct cyda_endpoints __user *)arg);
 	case CYDA_IOC_REGISTER:
@@ -252,6 +331,11 @@ static ssize_t denied_show(struct kobject *kobj, struct kobj_attribute *attr, ch
 	return sysfs_emit(buf, "%lld\n", (long long)atomic64_read(&cyda_denied));
 }
 
+static ssize_t faults_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%lld\n", (long long)atomic64_read(&cyda_faults));
+}
+
 static ssize_t agents_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	struct cyda_agent *a;
@@ -277,12 +361,14 @@ static ssize_t agents_show(struct kobject *kobj, struct kobj_attribute *attr, ch
 static struct kobj_attribute version_attr = __ATTR_RO(version);
 static struct kobj_attribute count_attr = __ATTR_RO(count);
 static struct kobj_attribute denied_attr = __ATTR_RO(denied);
+static struct kobj_attribute faults_attr = __ATTR_RO(faults);
 static struct kobj_attribute agents_attr = __ATTR_RO(agents);
 
 static struct attribute *cyda_attrs[] = {
 	&version_attr.attr,
 	&count_attr.attr,
 	&denied_attr.attr,
+	&faults_attr.attr,
 	&agents_attr.attr,
 	NULL,
 };

@@ -3,7 +3,9 @@
 #define _LINUX_CYDA_H
 
 #include <linux/list.h>
+#include <linux/timer.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 #include <uapi/linux/cyda.h>
 
 struct task_struct;
@@ -20,6 +22,11 @@ struct cyda_agent {
 	u64 registered_ns;
 	u32 endpoint_count;	/* 0 = no allow-list */
 	struct cyda_endpoint endpoints[CYDA_MAX_ENDPOINTS];
+	u64 watchdog_ms;	/* 0 = no watchdog */
+	u64 last_heartbeat_ns;
+	bool faulted;		/* quarantined: no I/O, SCHED_IDLE */
+	struct timer_list watchdog;
+	struct work_struct quarantine;
 };
 
 #ifdef CONFIG_CYDA
