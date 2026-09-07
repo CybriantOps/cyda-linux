@@ -76,6 +76,7 @@
 #include <asm/unistd.h>
 #include <asm/mmu_context.h>
 
+#include <linux/cyda.h>
 #include "exit.h"
 
 /*
@@ -869,6 +870,7 @@ void __noreturn do_exit(long code)
 		disassociate_ctty(1);
 	exit_task_namespaces(tsk);
 	exit_task_work(tsk);
+	cyda_task_exit(tsk);
 	exit_thread(tsk);
 
 	/*

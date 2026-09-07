@@ -2355,6 +2355,11 @@ __latent_entropy struct task_struct *copy_process(
 
 	rt_mutex_init_task(p);
 
+#ifdef CONFIG_CYDA
+	/* An agent identity is per thread and never inherited. */
+	p->cyda_agent = NULL;
+#endif
+
 	lockdep_assert_irqs_enabled();
 #ifdef CONFIG_PROVE_LOCKING
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);

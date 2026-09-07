@@ -1493,6 +1493,10 @@ struct task_struct {
 	/* Used by LSM modules for access restriction: */
 	void				*security;
 #endif
+#ifdef CONFIG_CYDA
+	/* CYDA OS: the agent this thread is, if it registered as one. */
+	struct cyda_agent		*cyda_agent;
+#endif
 #ifdef CONFIG_BPF_SYSCALL
 	/* Used by BPF task local storage */
 	struct bpf_local_storage __rcu	*bpf_storage;
